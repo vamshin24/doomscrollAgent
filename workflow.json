@@ -1,0 +1,270 @@
+{
+  "name": "HackerNews Doomscroll Agent MVP",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours"
+            }
+          ]
+        }
+      },
+      "id": "1",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "url": "https://hacker-news.firebaseio.com/v0/topstories.json",
+        "options": {}
+      },
+      "id": "3",
+      "name": "Fetch HN Top Stories",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [200, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "const payload = $input.all().map(i => i.json);\nreturn { json: { source_url: 'https://hacker-news.firebaseio.com/v0/topstories.json', raw_payload: JSON.stringify(payload) } };"
+      },
+      "id": "wrap_code",
+      "name": "Format Raw Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [400, 0]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO raw_data(source_url, raw_payload)\nVALUES ('{{ $json.source_url }}', '{{ $json.raw_payload.replace(/'/g, \"''\") }}')\nON CONFLICT (source_url)\nDO UPDATE SET raw_payload = EXCLUDED.raw_payload, fetched_at = CURRENT_TIMESTAMP\nRETURNING id;",
+        "options": {}
+      },
+      "id": "4",
+      "name": "Store Raw Data (Postgres)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [600, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "let rawStr = $('Format Raw Data').first().json.raw_payload;\nlet raw = [];\ntry {\n  raw = JSON.parse(rawStr);\n  if (Array.isArray(raw)) raw = raw.flat();\n  if (!raw) raw = [];\n} catch (e) {}\nreturn { json: { cleaned_text: JSON.stringify(raw.slice(0, 5)) } };"
+      },
+      "id": "5",
+      "name": "Prep Data for Embedding",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [800, 0]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.cleaned_text }}",
+        "options": {
+          "systemMessage": "Analyze the following Hacker News story IDs and generate a brief summary classification of topics and trends."
+        }
+      },
+      "id": "6",
+      "name": "Analysis (LLM Agent)",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [1000, 0]
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-1.5-pro-latest"
+      },
+      "id": "gemini_1",
+      "name": "Connect Gemini",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [900, 250]
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "hn-pipeline-analysis"
+      },
+      "id": "memory_1",
+      "name": "Conversation Memory",
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.2,
+      "position": [1050, 250]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.output }}",
+        "options": {
+          "systemMessage": "Based on this analysis, generate interesting trends and actionable insights about the tech community."
+        }
+      },
+      "id": "7",
+      "name": "Insight (LLM Agent)",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [1400, 0]
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-1.5-pro-latest"
+      },
+      "id": "gemini_2",
+      "name": "Connect Gemini 2",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [1300, 250]
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "hn-pipeline-insight"
+      },
+      "id": "memory_2",
+      "name": "Conversation Memory 2",
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.2,
+      "position": [1450, 250]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO insights(raw_data_id, cleaned_text, analysis_result, insight_result)\nVALUES (\n  (SELECT id FROM raw_data WHERE source_url = 'https://hacker-news.firebaseio.com/v0/topstories.json' ORDER BY fetched_at DESC LIMIT 1),\n  '{{ $('Prep Data for Embedding').first().json.cleaned_text.replace(/'/g, \"''\") }}',\n  '{{ $('Analysis (LLM Agent)').first().json.output.replace(/'/g, \"''\") }}',\n  '{{ $json.output.replace(/\\'/g, \"''\") }}'\n);",
+        "options": {}
+      },
+      "id": "8",
+      "name": "Store Insights (Postgres)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1800, 0]
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Fetch HN Top Stories",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch HN Top Stories": {
+      "main": [
+        [
+          {
+            "node": "Format Raw Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Raw Data": {
+      "main": [
+        [
+          {
+            "node": "Store Raw Data (Postgres)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Store Raw Data (Postgres)": {
+      "main": [
+        [
+          {
+            "node": "Prep Data for Embedding",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prep Data for Embedding": {
+      "main": [
+        [
+          {
+            "node": "Analysis (LLM Agent)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analysis (LLM Agent)": {
+      "main": [
+        [
+          {
+            "node": "Insight (LLM Agent)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insight (LLM Agent)": {
+      "main": [
+        [
+          {
+            "node": "Store Insights (Postgres)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Connect Gemini": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Analysis (LLM Agent)",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Conversation Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "Analysis (LLM Agent)",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Connect Gemini 2": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Insight (LLM Agent)",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Conversation Memory 2": {
+      "ai_memory": [
+        [
+          {
+            "node": "Insight (LLM Agent)",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {}
+}
