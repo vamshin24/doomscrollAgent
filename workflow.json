@@ -4,29 +4,40 @@
     {
       "parameters": {
         "rule": {
-          "interval": [{ "field": "hours", "hoursInterval": 6 }]
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 12
+            }
+          ]
         }
       },
       "id": "1",
       "name": "Schedule Trigger",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
-      "position": [0, 0]
+      "position": [
+        0,
+        0
+      ]
     },
-
     {
       "parameters": {
         "url": "https://hn.algolia.com/api/v1/search?tags=front_page&hitsPerPage=10",
-        "options": { "timeout": 15000 }
+        "options": {
+          "timeout": 15000
+        }
       },
       "id": "3",
       "name": "Fetch HN Top Stories",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [200, 0],
+      "position": [
+        200,
+        0
+      ],
       "continueOnFail": true
     },
-
     {
       "parameters": {
         "jsCode": "// Validate Algolia API response\n// If the HTTP node failed, item.error will be set (because continueOnFail=true)\nconst item = $input.item.json;\n\nif (item.error) {\n  // Log clearly in n8n execution log and stop\n  throw new Error(\n    `[API ERROR] Algolia HN API request failed: ${JSON.stringify(item.error)}\\n` +\n    `ACTION REQUIRED: Check your internet connection. If this persists, the Algolia API may be temporarily down. The pipeline will retry automatically at the next scheduled run (every 6 hours).`\n  );\n}\n\nconst hits = item.hits;\nif (!hits || !Array.isArray(hits) || hits.length === 0) {\n  throw new Error(\n    `[API ERROR] Algolia returned an empty response — no stories found.\\n` +\n    `This is usually temporary. Pipeline will retry in 6 hours.`\n  );\n}\n\nreturn { json: item };"
@@ -35,9 +46,11 @@
       "name": "Validate API Response",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [400, 0]
+      "position": [
+        400,
+        0
+      ]
     },
-
     {
       "parameters": {
         "jsCode": "// Deduplication gate — saves Gemini quota by skipping unchanged runs\nconst hits = $input.item.json.hits || [];\nconst currentIds = hits.map(h => h.objectID).sort().join(',');\n\nconst staticData = $getWorkflowStaticData('global');\nconst lastIds = staticData.lastTopIds || '';\n\nif (currentIds === lastIds && currentIds !== '') {\n  // Stories unchanged — stop cleanly with an informational message (not an error)\n  return [];\n}\n\nstaticData.lastTopIds = currentIds;\nreturn { json: $input.item.json };"
@@ -46,9 +59,11 @@
       "name": "Dedup Gate",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [600, 0]
+      "position": [
+        600,
+        0
+      ]
     },
-
     {
       "parameters": {
         "jsCode": "const hits = $input.item.json.hits || [];\nconst sourceUrl = 'https://hn.algolia.com/api/v1/search?tags=front_page';\nconst rawPayload = JSON.stringify(hits);\nreturn { json: { source_url: sourceUrl, raw_payload: rawPayload } };"
@@ -57,9 +72,11 @@
       "name": "Format Raw Data",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [800, 0]
+      "position": [
+        800,
+        0
+      ]
     },
-
     {
       "parameters": {
         "operation": "executeQuery",
@@ -70,9 +87,11 @@
       "name": "Store Raw Data (Postgres)",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.4,
-      "position": [1000, 0]
+      "position": [
+        1000,
+        0
+      ]
     },
-
     {
       "parameters": {
         "jsCode": "// Build readable story list for Gemini — titles + scores, ~600 tokens max\nconst rawStr = $('Format Raw Data').first().json.raw_payload;\nlet hits = [];\ntry { hits = JSON.parse(rawStr); } catch(e) {}\n\nconst storyList = hits.slice(0, 10).map((h, i) =>\n  `${i+1}. \"${h.title}\"\\n   Score: ${h.points || 0} | Comments: ${h.num_comments || 0} | By: ${h.author || 'unknown'}`\n).join('\\n\\n');\n\nreturn { json: { cleaned_text: storyList } };"
@@ -81,9 +100,11 @@
       "name": "Prep Data for Embedding",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1200, 0]
+      "position": [
+        1200,
+        0
+      ]
     },
-
     {
       "parameters": {
         "promptType": "define",
@@ -96,12 +117,14 @@
       "name": "Analysis (LLM Agent)",
       "type": "@n8n/n8n-nodes-langchain.agent",
       "typeVersion": 1.7,
-      "position": [1400, 0],
+      "position": [
+        1400,
+        0
+      ],
       "retryOnFail": true,
       "maxTries": 3,
       "waitBetweenTries": 30000
     },
-
     {
       "parameters": {
         "modelName": "models/gemini-1.5-flash"
@@ -110,9 +133,11 @@
       "name": "Connect Gemini",
       "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
       "typeVersion": 1,
-      "position": [1300, 250]
+      "position": [
+        1300,
+        250
+      ]
     },
-
     {
       "parameters": {
         "sessionIdType": "customKey",
@@ -122,9 +147,11 @@
       "name": "Conversation Memory",
       "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
       "typeVersion": 1.2,
-      "position": [1450, 250]
+      "position": [
+        1450,
+        250
+      ]
     },
-
     {
       "parameters": {
         "promptType": "define",
@@ -137,12 +164,14 @@
       "name": "Insight (LLM Agent)",
       "type": "@n8n/n8n-nodes-langchain.agent",
       "typeVersion": 1.7,
-      "position": [1800, 0],
+      "position": [
+        1800,
+        0
+      ],
       "retryOnFail": true,
       "maxTries": 3,
       "waitBetweenTries": 30000
     },
-
     {
       "parameters": {
         "modelName": "models/gemini-1.5-flash"
@@ -151,9 +180,11 @@
       "name": "Connect Gemini 2",
       "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
       "typeVersion": 1,
-      "position": [1700, 250]
+      "position": [
+        1700,
+        250
+      ]
     },
-
     {
       "parameters": {
         "sessionIdType": "customKey",
@@ -163,9 +194,11 @@
       "name": "Conversation Memory 2",
       "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
       "typeVersion": 1.2,
-      "position": [1850, 250]
+      "position": [
+        1850,
+        250
+      ]
     },
-
     {
       "parameters": {
         "jsCode": "const cleaned = $('Prep Data for Embedding').first().json.cleaned_text || '';\nconst analysis = $('Analysis (LLM Agent)').first().json.output || '';\nconst insight = $input.item.json.output || '';\nreturn { json: { cleaned_text: cleaned, analysis_result: analysis, insight_result: insight } };"
@@ -174,9 +207,11 @@
       "name": "Format Insights",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [2000, 0]
+      "position": [
+        2000,
+        0
+      ]
     },
-
     {
       "parameters": {
         "operation": "executeQuery",
@@ -187,52 +222,166 @@
       "name": "Store Insights (Postgres)",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.4,
-      "position": [2200, 0]
+      "position": [
+        2200,
+        0
+      ]
     }
   ],
-
   "connections": {
     "Schedule Trigger": {
-      "main": [[{ "node": "Fetch HN Top Stories", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Fetch HN Top Stories",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Fetch HN Top Stories": {
-      "main": [[{ "node": "Validate API Response", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Validate API Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Validate API Response": {
-      "main": [[{ "node": "Dedup Gate", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Dedup Gate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Dedup Gate": {
-      "main": [[{ "node": "Format Raw Data", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Format Raw Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Format Raw Data": {
-      "main": [[{ "node": "Store Raw Data (Postgres)", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Store Raw Data (Postgres)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Store Raw Data (Postgres)": {
-      "main": [[{ "node": "Prep Data for Embedding", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Prep Data for Embedding",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Prep Data for Embedding": {
-      "main": [[{ "node": "Analysis (LLM Agent)", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Analysis (LLM Agent)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Analysis (LLM Agent)": {
-      "main": [[{ "node": "Insight (LLM Agent)", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Insight (LLM Agent)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Insight (LLM Agent)": {
-      "main": [[{ "node": "Format Insights", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Format Insights",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Format Insights": {
-      "main": [[{ "node": "Store Insights (Postgres)", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Store Insights (Postgres)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Connect Gemini": {
-      "ai_languageModel": [[{ "node": "Analysis (LLM Agent)", "type": "ai_languageModel", "index": 0 }]]
+      "ai_languageModel": [
+        [
+          {
+            "node": "Analysis (LLM Agent)",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Conversation Memory": {
-      "ai_memory": [[{ "node": "Analysis (LLM Agent)", "type": "ai_memory", "index": 0 }]]
+      "ai_memory": [
+        [
+          {
+            "node": "Analysis (LLM Agent)",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Connect Gemini 2": {
-      "ai_languageModel": [[{ "node": "Insight (LLM Agent)", "type": "ai_languageModel", "index": 0 }]]
+      "ai_languageModel": [
+        [
+          {
+            "node": "Insight (LLM Agent)",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Conversation Memory 2": {
-      "ai_memory": [[{ "node": "Insight (LLM Agent)", "type": "ai_memory", "index": 0 }]]
+      "ai_memory": [
+        [
+          {
+            "node": "Insight (LLM Agent)",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
     }
   },
   "settings": {}
