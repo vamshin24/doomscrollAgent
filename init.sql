@@ -13,3 +13,4 @@ CREATE TABLE IF NOT EXISTS insights (
     insight_result TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+

@@ -93,6 +93,7 @@ app.get('/api/summary', async (req, res) => {
   }
 });
 
+
 app.listen(PORT, () => {
   console.log(`\n🚀 HN Intelligence Dashboard running at http://localhost:${PORT}\n`);
 });
