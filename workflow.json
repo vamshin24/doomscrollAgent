@@ -6,7 +6,8 @@
         "rule": {
           "interval": [
             {
-              "field": "hours"
+              "field": "hours",
+              "hoursInterval": 12
             }
           ]
         }
@@ -15,28 +16,66 @@
       "name": "Schedule Trigger",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
-      "position": [0, 0]
+      "position": [
+        0,
+        0
+      ]
     },
     {
       "parameters": {
-        "url": "https://hacker-news.firebaseio.com/v0/topstories.json",
-        "options": {}
+        "url": "https://hn.algolia.com/api/v1/search?tags=front_page&hitsPerPage=10",
+        "options": {
+          "timeout": 15000
+        }
       },
       "id": "3",
       "name": "Fetch HN Top Stories",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [200, 0]
+      "position": [
+        200,
+        0
+      ],
+      "continueOnFail": true
     },
     {
       "parameters": {
-        "jsCode": "const payload = $input.all().map(i => i.json);\nreturn { json: { source_url: 'https://hacker-news.firebaseio.com/v0/topstories.json', raw_payload: JSON.stringify(payload) } };"
+        "jsCode": "// Validate Algolia API response\n// If the HTTP node failed, item.error will be set (because continueOnFail=true)\nconst item = $input.item.json;\n\nif (item.error) {\n  // Log clearly in n8n execution log and stop\n  throw new Error(\n    `[API ERROR] Algolia HN API request failed: ${JSON.stringify(item.error)}\\n` +\n    `ACTION REQUIRED: Check your internet connection. If this persists, the Algolia API may be temporarily down. The pipeline will retry automatically at the next scheduled run (every 6 hours).`\n  );\n}\n\nconst hits = item.hits;\nif (!hits || !Array.isArray(hits) || hits.length === 0) {\n  throw new Error(\n    `[API ERROR] Algolia returned an empty response — no stories found.\\n` +\n    `This is usually temporary. Pipeline will retry in 6 hours.`\n  );\n}\n\nreturn { json: item };"
+      },
+      "id": "validate_api",
+      "name": "Validate API Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        400,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Deduplication gate — saves Gemini quota by skipping unchanged runs\nconst hits = $input.item.json.hits || [];\nconst currentIds = hits.map(h => h.objectID).sort().join(',');\n\nconst staticData = $getWorkflowStaticData('global');\nconst lastIds = staticData.lastTopIds || '';\n\nif (currentIds === lastIds && currentIds !== '') {\n  // Stories unchanged — stop cleanly with an informational message (not an error)\n  return [];\n}\n\nstaticData.lastTopIds = currentIds;\nreturn { json: $input.item.json };"
+      },
+      "id": "gate",
+      "name": "Dedup Gate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        600,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const hits = $input.item.json.hits || [];\nconst sourceUrl = 'https://hn.algolia.com/api/v1/search?tags=front_page';\nconst rawPayload = JSON.stringify(hits);\nreturn { json: { source_url: sourceUrl, raw_payload: rawPayload } };"
       },
       "id": "wrap_code",
       "name": "Format Raw Data",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [400, 0]
+      "position": [
+        800,
+        0
+      ]
     },
     {
       "parameters": {
@@ -48,41 +87,56 @@
       "name": "Store Raw Data (Postgres)",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.4,
-      "position": [600, 0]
+      "position": [
+        1000,
+        0
+      ]
     },
     {
       "parameters": {
-        "jsCode": "let rawStr = $('Format Raw Data').first().json.raw_payload;\nlet raw = [];\ntry {\n  raw = JSON.parse(rawStr);\n  if (Array.isArray(raw)) raw = raw.flat();\n  if (!raw) raw = [];\n} catch (e) {}\nreturn { json: { cleaned_text: JSON.stringify(raw.slice(0, 5)) } };"
+        "jsCode": "// Build readable story list for Gemini — titles + scores, ~600 tokens max\nconst rawStr = $('Format Raw Data').first().json.raw_payload;\nlet hits = [];\ntry { hits = JSON.parse(rawStr); } catch(e) {}\n\nconst storyList = hits.slice(0, 10).map((h, i) =>\n  `${i+1}. \"${h.title}\"\\n   Score: ${h.points || 0} | Comments: ${h.num_comments || 0} | By: ${h.author || 'unknown'}`\n).join('\\n\\n');\n\nreturn { json: { cleaned_text: storyList } };"
       },
       "id": "5",
       "name": "Prep Data for Embedding",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [800, 0]
+      "position": [
+        1200,
+        0
+      ]
     },
     {
       "parameters": {
         "promptType": "define",
         "text": "={{ $json.cleaned_text }}",
         "options": {
-          "systemMessage": "Analyze the following Hacker News story IDs and generate a brief summary classification of topics and trends."
+          "systemMessage": "You are a tech market analyst. Analyze the following Hacker News front page stories. Identify the top 3-5 topics, classify each story (AI/ML, Security, Databases, Cloud, Dev Tools, Society, Startups, Other), and note high-engagement stories. Be concise — max 300 words."
         }
       },
       "id": "6",
       "name": "Analysis (LLM Agent)",
       "type": "@n8n/n8n-nodes-langchain.agent",
       "typeVersion": 1.7,
-      "position": [1000, 0]
+      "position": [
+        1400,
+        0
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 30000
     },
     {
       "parameters": {
-        "modelName": "models/gemini-1.5-pro-latest"
+        "modelName": "models/gemini-1.5-flash"
       },
       "id": "gemini_1",
       "name": "Connect Gemini",
       "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
       "typeVersion": 1,
-      "position": [900, 250]
+      "position": [
+        1300,
+        250
+      ]
     },
     {
       "parameters": {
@@ -93,31 +147,43 @@
       "name": "Conversation Memory",
       "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
       "typeVersion": 1.2,
-      "position": [1050, 250]
+      "position": [
+        1450,
+        250
+      ]
     },
     {
       "parameters": {
         "promptType": "define",
         "text": "={{ $json.output }}",
         "options": {
-          "systemMessage": "Based on this analysis, generate interesting trends and actionable insights about the tech community."
+          "systemMessage": "You are a strategic intelligence analyst. Based on the tech analysis provided, generate 2-3 specific, actionable market insights. For each: (1) what signal it represents, (2) who should care, (3) what action to take. Be concrete. Max 250 words."
         }
       },
       "id": "7",
       "name": "Insight (LLM Agent)",
       "type": "@n8n/n8n-nodes-langchain.agent",
       "typeVersion": 1.7,
-      "position": [1400, 0]
+      "position": [
+        1800,
+        0
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 30000
     },
     {
       "parameters": {
-        "modelName": "models/gemini-1.5-pro-latest"
+        "modelName": "models/gemini-1.5-flash"
       },
       "id": "gemini_2",
       "name": "Connect Gemini 2",
       "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
       "typeVersion": 1,
-      "position": [1300, 250]
+      "position": [
+        1700,
+        250
+      ]
     },
     {
       "parameters": {
@@ -128,19 +194,38 @@
       "name": "Conversation Memory 2",
       "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
       "typeVersion": 1.2,
-      "position": [1450, 250]
+      "position": [
+        1850,
+        250
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const cleaned = $('Prep Data for Embedding').first().json.cleaned_text || '';\nconst analysis = $('Analysis (LLM Agent)').first().json.output || '';\nconst insight = $input.item.json.output || '';\nreturn { json: { cleaned_text: cleaned, analysis_result: analysis, insight_result: insight } };"
+      },
+      "id": "format_insights",
+      "name": "Format Insights",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2000,
+        0
+      ]
     },
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "INSERT INTO insights(raw_data_id, cleaned_text, analysis_result, insight_result)\nVALUES (\n  (SELECT id FROM raw_data WHERE source_url = 'https://hacker-news.firebaseio.com/v0/topstories.json' ORDER BY fetched_at DESC LIMIT 1),\n  '{{ $('Prep Data for Embedding').first().json.cleaned_text.replace(/'/g, \"''\") }}',\n  '{{ $('Analysis (LLM Agent)').first().json.output.replace(/'/g, \"''\") }}',\n  '{{ $json.output.replace(/\\'/g, \"''\") }}'\n);",
+        "query": "INSERT INTO insights(raw_data_id, cleaned_text, analysis_result, insight_result) VALUES ((SELECT id FROM raw_data WHERE source_url = 'https://hn.algolia.com/api/v1/search?tags=front_page' ORDER BY fetched_at DESC LIMIT 1), '{{ $json.cleaned_text.replace(/'/g, \"''\") }}', '{{ $json.analysis_result.replace(/'/g, \"''\") }}', '{{ $json.insight_result.replace(/'/g, \"''\") }}');",
         "options": {}
       },
       "id": "8",
       "name": "Store Insights (Postgres)",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.4,
-      "position": [1800, 0]
+      "position": [
+        2200,
+        0
+      ]
     }
   ],
   "connections": {
@@ -156,6 +241,28 @@
       ]
     },
     "Fetch HN Top Stories": {
+      "main": [
+        [
+          {
+            "node": "Validate API Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate API Response": {
+      "main": [
+        [
+          {
+            "node": "Dedup Gate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dedup Gate": {
       "main": [
         [
           {
@@ -211,6 +318,17 @@
       ]
     },
     "Insight (LLM Agent)": {
+      "main": [
+        [
+          {
+            "node": "Format Insights",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Insights": {
       "main": [
         [
           {
