@@ -1,19 +1,6 @@
 # 🔍 HN Intelligence Pipeline
 
-> An automated, n8n-native data intelligence pipeline that continuously monitors Hacker News, extracts market signals, and generates actionable insights using Google Gemini AI — with a live visual dashboard.
-
----
-
-## What It Does
-
-Every 12 hours, the pipeline:
-1. **Fetches** the top 10 Hacker News front-page stories (titles, scores, authors) via the Algolia HN API
-2. **Deduplicates** — skips Gemini entirely if stories haven't changed since last run (saves API quota)
-3. **Stores** raw story data in PostgreSQL with upsert (no duplicate rows ever)
-4. **Analyzes** stories using Gemini Flash — topic classification, clustering, engagement signals
-5. **Generates Insights** — 2–3 actionable market insights targeted at founders, developers, and recruiters
-6. **Persists** structured results to PostgreSQL for historical trend tracking
-7. **Visualises** everything on a live dark-mode dashboard at `http://localhost:3000`
+An n8n pipeline that monitors Hacker News every 12 hours, analyzes stories with Gemini AI, and visualizes insights on a live dashboard.
 
 ---
 
@@ -21,100 +8,64 @@ Every 12 hours, the pipeline:
 
 ```mermaid
 flowchart LR
-    A([⏰ Schedule\nEvery 6h]) --> B[🌐 Fetch HN\nAlgolia API]
-    B --> C{🔍 Validate\nAPI Response}
-    C -->|Error| D[🛑 Stop +\nClear n8n Error]
-    C -->|OK| E{♻️ Dedup Gate\nNew stories?}
-    E -->|Same as last run| F[⏭️ Skip\nNo Gemini calls]
-    E -->|Changed| G[💾 Store Raw\nPostgres UPSERT]
-    G --> H[🧹 Prep Data\nFormat for LLM]
-    H --> I[🤖 Analysis Agent\nGemini Flash]
-    I --> J[🤖 Insight Agent\nGemini Flash]
-    J --> K[💾 Store Insights\nPostgres INSERT]
-    K --> L[📊 Dashboard\nlocalhost:3000]
+    A([⏰ Schedule\n12h]) --> B[🌐 Fetch HN\nAlgolia API]
+    B --> C[✅ Validate\nAPI Response]
+    C --> D{♻️ Dedup Gate}
+    D -->|No change| E[⏭️ Skip]
+    D -->|New stories| F[🧹 Format\nRaw Data]
+    F --> G[💾 Postgres\nUPSERT]
+    G --> H[📋 Prep\nfor LLM]
+    H --> I[🤖 Analysis\nGemini Flash]
+    I --> J[🤖 Insights\nGemini Flash]
+    J --> K[💾 Postgres\nINSERT]
+    K --> L[📊 Dashboard\n:3000]
 ```
 
 ---
 
-## Tool Selection Rationale
+## Why Each Key Node Exists
 
-### Why n8n?
-n8n was chosen as the orchestration layer because it offers a **visual, node-based workflow builder** that makes the pipeline logic inspectable and modifiable without touching code. Critically, n8n has native **LangChain AI sub-nodes** (Agent, Chat Model, Memory) that allow attaching LLMs as child nodes — this makes swapping models or adding tools trivial from the UI. It also runs fully self-hosted via `npx n8n` with zero infrastructure overhead, and its Schedule Trigger handles cron-style automation natively.
-
-Alternative considered: Python scripts with APScheduler. Rejected because it would require manual orchestration, no visual debuggability, and tighter coupling between model logic and scheduling code.
-
-### Why PostgreSQL?
-PostgreSQL was chosen for data persistence because it supports:
-- **`RETURNING id`** — lets the pipeline retrieve the inserted row's ID immediately after write for use in downstream nodes
-- **`ON CONFLICT DO UPDATE`** — a single UPSERT statement prevents duplicate rows across pipeline re-runs with no extra logic
-- **`SERIAL` primary keys** — auto-incrementing IDs managed by the DB, never by the application
-- Native support in n8n via the built-in `n8n-nodes-base.postgres` node (no community package needed)
-
-Alternative considered: SQLite via community node `n8n-nodes-sqlite`. Rejected because the native C++ bindings for SQLite are not pre-compiled for Node.js v24 on Apple Silicon, causing a hard crash on package load (`Could not locate bindings file`).
-
-### Why Gemini Flash?
-`gemini-3.1 FlashLite Preview` is the only Google Gemini model available on the **AI Studio free tier** without billing enabled. The Pro and Ultra variants return HTTP 403 errors without a paid plan. Flash still delivers high-quality structured text analysis and classification, making it the right choice given the constraint. The model is accessed via n8n's native `@n8n/n8n-nodes-langchain.lmChatGoogleGemini` sub-node.
-
-### Why Algolia HN API?
-The official HN Firebase API (`hacker-news.firebaseio.com/v0/topstories.json`) returns up to 500 raw integer IDs with no metadata — you would need a separate HTTP request per story to get titles, scores, or URLs. The **Algolia HN Search API** (`hn.algolia.com/api/v1/search?tags=front_page`) returns the full front-page with titles, scores, comment counts, and authors in a **single request** with no authentication required. This dramatically reduces API calls and gives Gemini meaningful context instead of useless numbers.
+| Node | Why |
+|---|---|
+| **Validate API Response** | The HTTP node has `continueOnFail: true` so network errors don't silently pass through as empty data. This node inspects the response and throws a clear, actionable error message if the Algolia API failed or returned no stories. |
+| **Dedup Gate** | Gemini free tier allows only 50 req/day. Since HN's front page changes slowly, re-running AI on identical stories wastes quota. This node fingerprints the current story IDs using `$getWorkflowStaticData` (persists between runs without a DB query) and stops the workflow early if nothing has changed. |
+| **Format Raw Data** | The Algolia API response is a nested object (`{ hits: [...] }`). This node flattens it into the exact schema the Postgres node expects — `{ source_url, raw_payload }` — preventing n8n's autoMapInputData from injecting unexpected fields (like `id: 0`) that would cause primary key conflicts. |
 
 ---
 
-## Tech Stack
+## Tool Choices
 
-| Layer | Tool | Version |
-|---|---|---|
-| Orchestration | n8n (self-hosted) | 2.15.0 |
-| Database | PostgreSQL | 14 (via Homebrew) |
-| LLM | Google Gemini 3.1 FlashLite Preview | Free tier (AI Studio) |
-| Story Data API | Algolia HN Search API | Public, no auth |
-| Dashboard Backend | Express.js | 4.18 |
-| Dashboard Frontend | Vanilla HTML + Chart.js | Chart.js 4.4 |
-| Runtime | Node.js | 24 |
+| Tool | Why |
+|---|---|
+| **n8n** | Visual orchestration with native LangChain AI sub-nodes; schedule trigger and Postgres node built-in; fully self-hosted via `npx n8n` |
+| **PostgreSQL** | Supports `ON CONFLICT DO UPDATE` (safe upserts) and `RETURNING id` (immediate ID retrieval). SQLite rejected — C++ bindings uncompiled for Node 24 on Apple Silicon |
+| **Gemini 1.5 Flash** | Only Gemini model available on AI Studio free tier — Pro/Ultra return 403 without billing |
+| **Algolia HN API** | Returns full story data (title, score, comments) in one request. Firebase HN API returns only 500 raw IDs — requires one extra request per story |
 
 ---
 
-## Dashboard
+## Dashboard Tech Stack
 
-The dashboard is a **read-only visual layer** that connects to the same PostgreSQL database the pipeline writes to. It is intentionally kept simple — no framework, no build step, no bundler.
+**Backend** (`dashboard/server.js`): Express.js with two endpoints — `/api/insights` (last 20 DB rows) and `/api/summary` (parsed topic counts + sentiment scoring via keyword frequency).
 
-**Backend (`dashboard/server.js`):**
-- Built with Express.js
-- Two REST endpoints:
-  - `GET /api/insights` — returns the last 20 rows from the `insights` table, newest first
-  - `GET /api/summary` — returns the latest insight + parsed topic keyword counts + sentiment scoring
-- Topic extraction: keyword frequency matching across 8 predefined tech categories (AI/ML, Security, Databases, Cloud, Dev Tools, etc.)
-- Sentiment scoring: counts positive-signal words vs. concern-signal words across the combined analysis + insight text
-
-**Frontend (`dashboard/public/index.html`):**
-- Served as a static file by Express
-- **Topic Clusters** → horizontal bar chart (Chart.js) showing which tech topics appear most in the latest analysis
-- **Sentiment Overview** → donut chart (Chart.js) showing positive vs. neutral vs. concern signal balance
-- **Latest Insight** → full LLM-generated insight text rendered as a scrollable card
-- **Analysis History** → timeline of past pipeline runs with insight previews
-- Auto-refreshes every 5 minutes
-- Dark-mode design with CSS variables, Inter font (Google Fonts), and micro-animations
+**Frontend** (`dashboard/public/index.html`): Vanilla HTML + Chart.js (CDN). No build step. Horizontal bar chart for topic clusters, donut chart for sentiment, scrollable insight cards, 5-minute auto-refresh.
 
 ---
 
-## Reproducibility — Step by Step
-
-Follow these steps exactly to run the pipeline locally from scratch.
+## Setup
 
 ### Prerequisites
-- macOS with [Homebrew](https://brew.sh) installed
-- Node.js ≥ 18 (`node --version`)
-- A free API key from [Google AI Studio](https://aistudio.google.com/app/apikey)
+- macOS + [Homebrew](https://brew.sh)
+- Node.js ≥ 18
+- Free API key from [Google AI Studio](https://aistudio.google.com/app/apikey)
 
----
-
-### Step 1 — Clone the repo
+### Step 1 — Clone
 ```bash
 git clone https://github.com/vamshin24/doomscrollAgent.git
 cd doomscrollAgent
 ```
 
-### Step 2 — Install and start PostgreSQL
+### Step 2 — Set up PostgreSQL
 ```bash
 brew install postgresql@14
 brew services start postgresql@14
@@ -123,118 +74,71 @@ $(brew --prefix)/opt/postgresql@14/bin/createdb pipeline
 $(brew --prefix)/opt/postgresql@14/bin/psql pipeline -c "CREATE USER n8n WITH SUPERUSER PASSWORD 'n8n';"
 $(brew --prefix)/opt/postgresql@14/bin/psql pipeline < init.sql
 ```
-This creates the `pipeline` database with `raw_data` and `insights` tables.
 
 ### Step 3 — Start n8n
-Open a terminal and run:
 ```bash
 npx n8n
+# → http://localhost:5678
 ```
-Navigate to `http://localhost:5678` and create an account (local only).
 
-### Step 4 — Import the workflow
-1. In n8n, click **+ Add Workflow**
-2. Click `···` (top-right menu) → **Import from File**
-3. Select `workflow.json` from the cloned repository
-4. The full pipeline loads with all nodes connected
+### Step 4 — Import workflow
+In n8n: **+ Add Workflow** → `···` → **Import from File** → select `workflow.json`
 
 ### Step 5 — Add Postgres credentials
-1. Double-click the **Store Raw Data (Postgres)** node
-2. Under *Credential to connect with*, click **Create New**
-3. Fill in:
-   - **Host:** `localhost`
-   - **Database:** `pipeline`
-   - **User:** `n8n`
-   - **Password:** `n8n`
-   - **Port:** `5432`
-4. Click **Save** and close
-5. Double-click **Store Insights (Postgres)** and select the same credential
+Double-click **Store Raw Data (Postgres)** → Create credential:
+- Host: `localhost` | Database: `pipeline` | User: `n8n` | Password: `n8n` | Port: `5432`
+
+Repeat for **Store Insights (Postgres)** using the same credential.
 
 ### Step 6 — Add Gemini credentials
-1. Double-click the **Connect Gemini** node (below Analysis agent)
-2. Under *Credential to connect with*, click **Create New**
-3. Paste your Google AI Studio API key
-4. Click **Save**
-5. Repeat for **Connect Gemini 2** (below Insight agent) — use the same credential
-6. Verify both model nodes show `models/gemini-3.1 FlashLite Preview`
+Double-click **Connect Gemini** → Create credential → paste your AI Studio key.
+Repeat for **Connect Gemini 2**. Both must show `models/gemini-1.5-flash`.
 
-### Step 7 — Run the pipeline
-Click **Test Workflow** (bottom of canvas). Watch it execute step by step. On success you'll see green checkmarks on all nodes and new rows in your database.
+> ⚠️ Only `gemini-1.5-flash` works on the free tier. Pro/Ultra return 403 errors.
 
-### Step 8 — Activate for continuous monitoring
-Toggle **Active** (top-right of n8n). The pipeline now runs every 6 hours automatically.
+### Step 7 — Run
+Click **Test Workflow** to run manually, or toggle **Active** for automatic 12-hour scheduling.
 
-### Step 9 — Start the dashboard
-Open a second terminal:
+### Step 8 — Start dashboard
 ```bash
 npm install
 npm run dashboard
-```
-Open `http://localhost:3000` to see live charts powered by your Postgres data.
-
----
-
-## Project Structure
-
-```
-doomscrollAgent/
-├── workflow.json          # n8n pipeline definition (import this into n8n)
-├── init.sql               # PostgreSQL schema — raw_data + insights tables
-├── package.json           # Dashboard server dependencies
-├── dashboard/
-│   ├── server.js          # Express.js API server
-│   └── public/
-│       └── index.html     # Chart.js dashboard (single-page, no build needed)
-└── README.md
+# → http://localhost:3000
 ```
 
 ---
 
 ## Error Handling
 
-All errors surface directly in n8n's execution log with clear, actionable messages:
-
-| Scenario | How It's Handled |
+| Scenario | Behaviour |
 |---|---|
-| Algolia API fails | `continueOnFail: true` on HTTP node → Code node throws descriptive error with fix steps |
-| Algolia returns empty response | Code node throws with explanation → n8n marks run failed |
-| Gemini rate limit (429) | `retryOnFail: true`, 3 attempts, 30-second wait between each |
-| Wrong Gemini model (403/404) | Error message tells you exactly: use `models/gemini-1.5-flash` |
-| Duplicate DB rows | `ON CONFLICT (source_url) DO UPDATE` — always upserts safely |
-| Stories unchanged | Dedup gate returns `[]` — workflow stops cleanly, zero Gemini calls |
+| Algolia API fails | `continueOnFail: true` → Validate node throws descriptive error in n8n log |
+| Empty API response | Validate node throws with explanation |
+| Gemini rate limit (429) | Auto-retry 3×, 30-second wait between attempts |
+| Wrong model (403/404) | Error tells you exactly which node to fix and what model to use |
+| Duplicate DB rows | `ON CONFLICT DO UPDATE` — always upserts safely |
+| Stories unchanged | Dedup gate returns `[]` — pipeline stops cleanly, zero Gemini calls used |
 
 ---
 
-## Constraint Handling & Trade-offs
+## Constraints & Trade-offs
 
-| Constraint | Decision | Why |
-|---|---|---|
-| Gemini 50 req/day free limit | Schedule every 6h (8 calls/day) | Leaves 83% quota unused — safe headroom |
-| Gemini rate limit (2 RPM) | 30s retry backoff × 3 attempts | Handles burst without manual intervention |
-| No Docker Desktop | PostgreSQL via Homebrew | Native install, identical behaviour, simpler |
-| SQLite broken on Node 24 | Switched to PostgreSQL | SQLite bindings uncompiled for darwin/arm64 |
-| Firebase API returns only IDs | Switched to Algolia API | Returns full story data in 1 request |
-| Dedup avoids redundant LLM calls | `$getWorkflowStaticData` fingerprint | No DB overhead, persists across runs |
+| Decision | Reason |
+|---|---|
+| 12h schedule | 2 Gemini calls/run × 2 runs/day = 4 calls/day — well within 50 req/day free limit |
+| Dedup before LLM | Saves quota when HN hasn't changed; uses workflow static data (no DB overhead) |
+| Algolia over Firebase | One API call vs. 10+; returns story titles/scores Gemini actually needs |
+| No Docker | PostgreSQL via Homebrew — same behaviour, simpler setup, no daemon overhead |
 
 ---
 
 ## Self-Assessment
 
-| Criterion | Weight | Evidence |
-|---|---|---|
-| **Technical Execution** | 40% | Working prototype: 9-node pipeline, schedule → API → dedup → Postgres → Gemini analysis → Gemini insights → Postgres → dashboard. Error handling on every failure point with clear messages. |
-| **Documentation & Reproducibility** | 25% | This README: architecture diagram, tool rationale, 9-step setup guide, tech stack table, project structure. Any reviewer can reproduce in ~10 minutes. |
-| **Creativity & Constraint Handling** | 20% | Algolia API swap, dedup gate, 6h schedule, flash model selection, UPSERT pattern, Homebrew Postgres — each is a deliberate, documented constraint workaround. |
-| **Business Impact Reasoning** | 15% | Pipeline surfaces HN topic trends, sentiment shifts, and persona-targeted insights (founders/recruiters/devs) autonomously. Runs 24/7 at $0/month on free tiers. |
+| Criterion | Evidence |
+|---|---|
+| **Technical Execution (40%)** | 9-node pipeline with schedule, API validation, dedup, Postgres upserts, dual Gemini agents, visual dashboard. Error handling on every failure point. |
+| **Documentation & Reproducibility (25%)** | Architecture diagram, 8-step setup, node rationale table, tech choices explained with alternatives rejected. |
+| **Creativity & Constraint Handling (20%)** | Dedup gate, Algolia swap, 12h scheduling, Flash model selection, UPSERT pattern — each a deliberate constraint workaround, documented above. |
+| **Business Impact Reasoning (15%)** | Surfaces HN topic trends, sentiment shifts, and persona-targeted insights autonomously at $0/month. |
 
----
-
-## Running Costs
-
-| Resource | Free Tier Limit | This Project's Usage |
-|---|---|---|
-| Gemini Flash (req/day) | 50 | 8 (4 runs × 2 calls) |
-| Algolia HN API | Unlimited (public) | 4 req/day |
-| PostgreSQL (Homebrew) | Self-hosted | Free |
-| n8n (`npx`) | Self-hosted | Free |
-| **Total monthly cost** | | **$0** |
+**Running cost: $0/month** — Gemini Flash (4 req/day of 50 limit), Algolia (public/free), Postgres + n8n (self-hosted).
