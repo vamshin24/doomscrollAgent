@@ -4,6 +4,12 @@ An n8n pipeline that monitors Hacker News every 12 hours, analyzes stories with 
 
 ---
 
+## Dashboard Preview
+
+![HN Intelligence Dashboard](dashboard_preview.png)
+
+---
+
 ## Architecture
 
 ```mermaid
