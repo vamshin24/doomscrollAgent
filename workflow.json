@@ -132,8 +132,18 @@
     },
     {
       "parameters": {
+        "jsCode": "const cleaned = $('Prep Data for Embedding').first().json.cleaned_text || '';\nconst analysis = $('Analysis (LLM Agent)').first().json.output || '';\nconst insight = $input.item.json.output || '';\nreturn { json: { cleaned_text: cleaned, analysis_result: analysis, insight_result: insight } };"
+      },
+      "id": "format_insights",
+      "name": "Format Insights",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1600, 0]
+    },
+    {
+      "parameters": {
         "operation": "executeQuery",
-        "query": "INSERT INTO insights(raw_data_id, cleaned_text, analysis_result, insight_result)\nVALUES (\n  (SELECT id FROM raw_data WHERE source_url = 'https://hacker-news.firebaseio.com/v0/topstories.json' ORDER BY fetched_at DESC LIMIT 1),\n  '{{ $('Prep Data for Embedding').first().json.cleaned_text.replace(/'/g, \"''\") }}',\n  '{{ $('Analysis (LLM Agent)').first().json.output.replace(/'/g, \"''\") }}',\n  '{{ $json.output.replace(/\\'/g, \"''\") }}'\n);",
+        "query": "INSERT INTO insights(raw_data_id, cleaned_text, analysis_result, insight_result) VALUES ((SELECT id FROM raw_data WHERE source_url = 'https://hacker-news.firebaseio.com/v0/topstories.json' ORDER BY fetched_at DESC LIMIT 1), '{{ $json.cleaned_text.replace(/'/g, \"''\") }}', '{{ $json.analysis_result.replace(/'/g, \"''\") }}', '{{ $json.insight_result.replace(/'/g, \"''\") }}');",
         "options": {}
       },
       "id": "8",
@@ -211,6 +221,17 @@
       ]
     },
     "Insight (LLM Agent)": {
+      "main": [
+        [
+          {
+            "node": "Format Insights",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Insights": {
       "main": [
         [
           {
