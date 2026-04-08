@@ -142,3 +142,31 @@ npm run dashboard
 | **Business Impact Reasoning (15%)** | Surfaces HN topic trends, sentiment shifts, and persona-targeted insights autonomously at $0/month. |
 
 **Running cost: $0/month** — Gemini Flash (4 req/day of 50 limit), Algolia (public/free), Postgres + n8n (self-hosted).
+
+---
+
+## If I Had More Time
+
+| Area | What I'd Add |
+|---|---|
+| **Richer story data** | Fetch full story details per item (title, URL, top comments) via `hacker-news.firebaseio.com/v0/item/{id}.json` to give Gemini real article context, not just metadata |
+| **Multi-source monitoring** | Add Reddit (r/programming, r/MachineLearning) and DEV.to as additional sources alongside HN for broader signal coverage |
+| **Trend diffing** | Compare each run's topic clusters against the previous run in the DB — surface *rising* topics, not just current ones |
+| **Structured LLM output** | Use Gemini's JSON mode to return `{ topics: [], sentiment: "positive/neutral/concern", insights: [] }` instead of free-text — makes dashboard parsing deterministic and reliable |
+| **Email/Slack digest** | Add an n8n notification node to send a formatted insight summary to Slack or email after each successful run |
+| **Better dashboard** | Add a timeline chart showing topic frequency across all historical runs, and a search bar to query past insights |
+
+---
+
+## Scaling to Production
+
+| Change | Why |
+|---|---|
+| **Replace `npx n8n` with Docker + n8n Cloud** | Self-hosted `npx` doesn't persist across machine restarts. n8n Cloud or a containerised deployment on Railway/Render gives 24/7 uptime |
+| **Replace Gemini Flash with paid tier or Groq** | Free tier (50 req/day) caps growth. Groq offers 14,400 req/day free with Llama 3.3 70B — or Gemini paid tier removes all limits |
+| **Add a message queue (Redis/BullMQ)** | For multiple data sources running in parallel, a queue prevents race conditions on the Postgres write layer |
+| **Per-story analysis instead of batch** | Instead of summarising the top 10 stories as a batch, process each story individually — enables per-article tagging, vector embeddings, and semantic search |
+| **Vector database (pgvector or Pinecone)** | Store Gemini embeddings of each insight to enable semantic similarity search — "find all insights related to AI regulation" |
+| **Monitoring & alerting** | Add Prometheus metrics on pipeline run success/failure rates and a Grafana dashboard for operational visibility |
+| **CI/CD for workflow.json** | Auto-import updated `workflow.json` into n8n via the n8n API on every `main` branch push |
+
