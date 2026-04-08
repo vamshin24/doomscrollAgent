@@ -53,7 +53,7 @@ PostgreSQL was chosen for data persistence because it supports:
 Alternative considered: SQLite via community node `n8n-nodes-sqlite`. Rejected because the native C++ bindings for SQLite are not pre-compiled for Node.js v24 on Apple Silicon, causing a hard crash on package load (`Could not locate bindings file`).
 
 ### Why Gemini Flash?
-`gemini-1.5-flash` is the only Google Gemini model available on the **AI Studio free tier** without billing enabled. The Pro and Ultra variants return HTTP 403 errors without a paid plan. Flash still delivers high-quality structured text analysis and classification, making it the right choice given the constraint. The model is accessed via n8n's native `@n8n/n8n-nodes-langchain.lmChatGoogleGemini` sub-node.
+`gemini-3.1 FlashLite Preview` is the only Google Gemini model available on the **AI Studio free tier** without billing enabled. The Pro and Ultra variants return HTTP 403 errors without a paid plan. Flash still delivers high-quality structured text analysis and classification, making it the right choice given the constraint. The model is accessed via n8n's native `@n8n/n8n-nodes-langchain.lmChatGoogleGemini` sub-node.
 
 ### Why Algolia HN API?
 The official HN Firebase API (`hacker-news.firebaseio.com/v0/topstories.json`) returns up to 500 raw integer IDs with no metadata — you would need a separate HTTP request per story to get titles, scores, or URLs. The **Algolia HN Search API** (`hn.algolia.com/api/v1/search?tags=front_page`) returns the full front-page with titles, scores, comment counts, and authors in a **single request** with no authentication required. This dramatically reduces API calls and gives Gemini meaningful context instead of useless numbers.
@@ -66,7 +66,7 @@ The official HN Firebase API (`hacker-news.firebaseio.com/v0/topstories.json`) r
 |---|---|---|
 | Orchestration | n8n (self-hosted) | 2.15.0 |
 | Database | PostgreSQL | 14 (via Homebrew) |
-| LLM | Google Gemini 1.5 Flash | Free tier (AI Studio) |
+| LLM | Google Gemini 3.1 FlashLite Preview | Free tier (AI Studio) |
 | Story Data API | Algolia HN Search API | Public, no auth |
 | Dashboard Backend | Express.js | 4.18 |
 | Dashboard Frontend | Vanilla HTML + Chart.js | Chart.js 4.4 |
@@ -156,7 +156,7 @@ Navigate to `http://localhost:5678` and create an account (local only).
 3. Paste your Google AI Studio API key
 4. Click **Save**
 5. Repeat for **Connect Gemini 2** (below Insight agent) — use the same credential
-6. Verify both model nodes show `models/gemini-1.5-flash`
+6. Verify both model nodes show `models/gemini-3.1 FlashLite Preview`
 
 ### Step 7 — Run the pipeline
 Click **Test Workflow** (bottom of canvas). Watch it execute step by step. On success you'll see green checkmarks on all nodes and new rows in your database.
